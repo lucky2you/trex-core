@@ -2211,6 +2211,9 @@ inline void CFlowPktInfo::update_tcp_cs(TCPHeader * tcp,
             tcp->setChecksumRaw(rte_ipv4_phdr_cksum((struct ipv4_hdr *)ipv4->getPointer(),
                                                              PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM));
         }
+    } else {
+        tcp->setChecksum(0);
+        tcp->setChecksumRaw(rte_ipv4_udptcp_cksum((struct ipv4_hdr *)ipv4->getPointer(), tcp));
     }
 }
 

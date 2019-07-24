@@ -545,9 +545,7 @@ rte_ipv4_cksum(const struct ipv4_hdr *ipv4_hdr)
 	return (cksum == 0xffff) ? cksum : (uint16_t)~cksum;
 }
 
-
-
-uint16_t rte_ipv4_phdr_cksum(const struct ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
+static inline uint16_t __rte_ipv4_phdr_cksum(const struct ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 {
 	struct ipv4_psd_header {
 		uint32_t src_addr; /* IP address of source host. */
@@ -568,7 +566,34 @@ uint16_t rte_ipv4_phdr_cksum(const struct ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 			(uint16_t)( PAL_NTOHS(ipv4_hdr->total_length)
 				- rte_ipv4_header_len(ipv4_hdr)));
 	}
-	return rte_raw_cksum(&psd_hdr, sizeof(psd_hdr));
+	return __rte_raw_cksum(&psd_hdr, sizeof(psd_hdr), 0);
+}
+
+uint16_t rte_ipv4_phdr_cksum(const struct ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
+{
+    return __rte_raw_cksum_reduce(__rte_ipv4_phdr_cksum(ipv4_hdr, ol_flags));
+}
+
+uint16_t rte_ipv4_udptcp_cksum(const struct ipv4_hdr *ipv4_hdr, const void *l4_hdr)
+{
+	uint32_t cksum;
+	uint32_t l3_len, l4_len;
+
+	l3_len = PAL_NTOHS(ipv4_hdr->total_length);
+	if (l3_len < sizeof(struct ipv4_hdr))
+		return 0;
+
+	l4_len = l3_len - rte_ipv4_header_len(ipv4_hdr);
+
+	cksum = __rte_ipv4_phdr_cksum(ipv4_hdr, 0);
+	cksum = __rte_raw_cksum(l4_hdr, l4_len, cksum);
+    cksum = __rte_raw_cksum_reduce(cksum);
+
+	cksum = (~cksum) & 0xffff;
+	if (cksum == 0)
+		cksum = 0xffff;
+
+	return (uint16_t)cksum;
 }
 
 uint16_t rte_ipv6_phdr_cksum(const struct ipv6_hdr *ipv6_hdr, uint64_t ol_flags)
