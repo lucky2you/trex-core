@@ -2146,7 +2146,6 @@ inline void CFlowPktInfo::update_pkt_info2(char *p,
             }
         }
         update_tcp_cs(tcp,ipv4);
-
     }else {
         if ( m_pkt_indication.m_desc.IsUdp() ){
             UDPHeader * udp =(UDPHeader *)(p +m_pkt_indication.getFastTcpOffset() );
@@ -2164,7 +2163,6 @@ inline void CFlowPktInfo::update_pkt_info2(char *p,
                 }
             }
             update_udp_cs(udp,ipv4);
-
         }else{
             BP_ASSERT(0);
         }
@@ -2180,21 +2178,18 @@ inline void CFlowPktInfo::update_mbuf(rte_mbuf_t * m){
     BP_ASSERT(l4_offset > m->l2_len);
     m->l3_len = l4_offset - m->l2_len ;
 
-    if (CGlobalInfo::m_options.preview.getChecksumOffloadEnable()) {
+    if ( unlikely (m_pkt_indication.is_ipv6() ) ) {
+        m->ol_flags |= PKT_TX_IPV6 ;
+    }else{
+        /* Ipv4*/
+        m->ol_flags |= PKT_TX_IPV4 | PKT_TX_IP_CKSUM;
+    }
 
-        if ( unlikely (m_pkt_indication.is_ipv6() ) ) {
-            m->ol_flags |= PKT_TX_IPV6 ;
-        }else{
-            /* Ipv4*/
-            m->ol_flags |= PKT_TX_IPV4 | PKT_TX_IP_CKSUM;
-        }
-
-        if ( m_pkt_indication.m_desc.IsTcp() ) {
-            m->ol_flags |=   PKT_TX_TCP_CKSUM;
-        } else {
-            if (m_pkt_indication.m_desc.IsUdp()) {
-                m->ol_flags |= PKT_TX_UDP_CKSUM;
-            }
+    if ( m_pkt_indication.m_desc.IsTcp() ) {
+        m->ol_flags |=   PKT_TX_TCP_CKSUM;
+    } else {
+        if (m_pkt_indication.m_desc.IsUdp()) {
+            m->ol_flags |= PKT_TX_UDP_CKSUM;
         }
     }
 }
@@ -2203,34 +2198,24 @@ inline void CFlowPktInfo::update_mbuf(rte_mbuf_t * m){
 inline void CFlowPktInfo::update_tcp_cs(TCPHeader * tcp,
                                         IPHeader  * ipv4){
 
-    if (CGlobalInfo::m_options.preview.getChecksumOffloadEnable()) {
-        /* set pseudo-header checksum */
-        if ( m_pkt_indication.is_ipv6() ){
-            tcp->setChecksumRaw(rte_ipv6_phdr_cksum((struct ipv6_hdr *)ipv4->getPointer(), PKT_TX_IPV6 |PKT_TX_TCP_CKSUM));
-        }else{
-            tcp->setChecksumRaw(rte_ipv4_phdr_cksum((struct ipv4_hdr *)ipv4->getPointer(),
-                                                             PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM));
-        }
-    } else {
-        tcp->setChecksum(0);
-        tcp->setChecksumRaw(rte_ipv4_udptcp_cksum((struct ipv4_hdr *)ipv4->getPointer(), tcp));
+    /* set pseudo-header checksum */
+    if ( m_pkt_indication.is_ipv6() ){
+        tcp->setChecksumRaw(rte_ipv6_phdr_cksum((struct ipv6_hdr *)ipv4->getPointer(), PKT_TX_IPV6 |PKT_TX_TCP_CKSUM));
+    }else{
+        tcp->setChecksumRaw(rte_ipv4_phdr_cksum((struct ipv4_hdr *)ipv4->getPointer(),
+                                                            PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM));
     }
 }
 
 inline void CFlowPktInfo::update_udp_cs(UDPHeader * udp,
                                         IPHeader  * ipv4){
-
-    if (CGlobalInfo::m_options.preview.getChecksumOffloadEnable()) {
-        /* set pseudo-header checksum */
-        if ( m_pkt_indication.is_ipv6() ){
-            udp->setChecksumRaw(rte_ipv6_phdr_cksum((struct ipv6_hdr *) ipv4->getPointer(),
-                                                         PKT_TX_IPV6 | PKT_TX_UDP_CKSUM));
-        }else{
-            udp->setChecksumRaw(rte_ipv4_phdr_cksum((struct ipv4_hdr *) ipv4->getPointer(),
-                                                         PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_UDP_CKSUM));
-        }
-    } else {
-        udp->setChecksum(0);
+    /* set pseudo-header checksum */
+    if ( m_pkt_indication.is_ipv6() ){
+        udp->setChecksumRaw(rte_ipv6_phdr_cksum((struct ipv6_hdr *) ipv4->getPointer(),
+                                                        PKT_TX_IPV6 | PKT_TX_UDP_CKSUM));
+    }else{
+        udp->setChecksumRaw(rte_ipv4_phdr_cksum((struct ipv4_hdr *) ipv4->getPointer(),
+                                                        PKT_TX_IPV4 | PKT_TX_IP_CKSUM | PKT_TX_UDP_CKSUM));
     }
 }
 
@@ -2414,6 +2399,8 @@ inline rte_mbuf_t * CFlowPktInfo::do_generate_new_mbuf_ex(CGenNode * node,
 
     append_big_mbuf(m,node);
 
+    hw_checksum_sim(m);
+
     return(m);
 }
 
@@ -2437,6 +2424,8 @@ inline rte_mbuf_t * CFlowPktInfo::do_generate_new_mbuf_ex_big(CGenNode * node,
     update_mbuf(m);
 
     update_pkt_info2(p,flow_info,0,node);
+
+    hw_checksum_sim(m);
 
     return(m);
 }
@@ -2486,6 +2475,8 @@ inline rte_mbuf_t * CFlowPktInfo::do_generate_new_mbuf_ex_vm(CGenNode * node,
 
     update_pkt_info2(p,flow_info,pkt_adjust,node);
 
+    hw_checksum_sim(m);
+
     /* return change in packet size due to packet tranforms */
     *s_size = vm.m_new_pkt_size - m_packet->pkt_len;
 
@@ -2529,6 +2520,8 @@ inline rte_mbuf_t * CFlowPktInfo::do_generate_new_mbuf(CGenNode * node){
 
     append_big_mbuf(m,node);
 
+    hw_checksum_sim(m);
+
     return m;
 }
 
@@ -2554,6 +2547,8 @@ inline rte_mbuf_t * CFlowPktInfo::do_generate_new_mbuf_big(CGenNode * node){
     update_mbuf(m);
 
     update_pkt_info(p,node);
+
+    hw_checksum_sim(m);
 
     return(m);
 }
