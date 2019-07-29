@@ -245,6 +245,7 @@ class CManyIPInfo {
     void insert(const COneIPv4Info &ip_info);
     bool lookup(uint32_t ip, uint16_t vlan, MacAddress &ret_mac) const;
     bool exists(uint32_t ip, uint16_t vlan = 0) const;
+    const COneIPInfo *find(uint32_t ip, uint16_t vlan) const;
     void clear();
 
     void dump(FILE *fd);

@@ -531,13 +531,19 @@ bool CSimplePacketParser::Parse(){
     rte_mbuf_t * m=m_m;
     uint8_t *p=rte_pktmbuf_mtod(m, uint8_t*);
     EthernetHeader *m_ether = (EthernetHeader *)p;
+    ArpHdr * arp=0;
     IPHeader * ipv4=0;
     IPv6Header * ipv6=0;
     m_vlan_offset=0;
+    m_vlan_id=0;
     uint8_t protocol = 0;
 
     // Retrieve the protocol type from the packet
     switch( m_ether->getNextProtocol() ) {
+    case EthernetHeader::Protocol::ARP :    
+        // ARP packet
+        arp = (ArpHdr *)(p+14);
+        break;
     case EthernetHeader::Protocol::IP :
         // IPv4 packet
         ipv4=(IPHeader *)(p+14);
@@ -551,8 +557,13 @@ bool CSimplePacketParser::Parse(){
         protocol = ipv6->getNextHdr();
         break;
     case EthernetHeader::Protocol::VLAN :
+        m_vlan_id = m_ether->getVlanTag();
         m_vlan_offset = 4;
         switch ( m_ether->getVlanProtocol() ){
+        case EthernetHeader::Protocol::ARP :    
+            // ARP packet
+            arp = (ArpHdr *)(p+18);
+            break;
         case EthernetHeader::Protocol::IP:
             // IPv4 packet
             ipv4=(IPHeader *)(p+18);
@@ -574,6 +585,7 @@ bool CSimplePacketParser::Parse(){
     m_protocol =protocol;
     m_ipv4=ipv4;
     m_ipv6=ipv6;
+    m_arp=arp;
 
     if ( protocol == 0 ){
         return (false);

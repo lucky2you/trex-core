@@ -126,6 +126,15 @@ bool CManyIPInfo::lookup(uint32_t ip, uint16_t vlan, MacAddress &ret_mac) const 
     }
 }
 
+const COneIPInfo* CManyIPInfo::find(uint32_t ip, uint16_t vlan) const {
+    ip_vlan_to_many_ip_iter_t it = m_ipv4_resolve.find(CIpVlan(ip, vlan));
+    if (it != m_ipv4_resolve.end()) {
+        return &(it->second);
+    } else {
+        return NULL;
+    }
+}
+
 bool CManyIPInfo::exists(uint32_t ip, uint16_t vlan) const {
     ip_vlan_to_many_ip_iter_t it = m_ipv4_resolve.find(CIpVlan(ip, vlan));
     return (it != m_ipv4_resolve.end());

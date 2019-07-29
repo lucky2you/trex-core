@@ -23,6 +23,7 @@ limitations under the License.
 #include "utl_json.h"
 #include "trex_watchdog.h"
 #include "pkt_gen.h"
+#include "common/Network/Packet/Arp.h"
 #include "common/basic_utils.h"
 #include "stateful_rx_core.h"
 
@@ -453,10 +454,17 @@ bool CCPortLatency::do_learn(uint32_t external_ip,
     return (true);
 }
 
-bool CCPortLatency::check_packet(rte_mbuf_t * m,CRx_check_header * & rx_p) {
+bool CCPortLatency::check_packet(rte_mbuf_t * m,
+                                 CRx_check_header * & rx_p,
+                                 bool &is_arp) {
     CSimplePacketParser parser(m);
     if ( !parser.Parse()  ) {
         m_unsup_prot++;  // Unsupported protocol
+
+        if (parser.m_arp) {
+            is_arp = true;
+        }
+
         return (false);
     }
 
@@ -776,10 +784,115 @@ void  CLatencyManager::wait_for_rx_dump(){
     }
 }
 
+void CLatencyManager::send_one_arp_requst(const COneIPInfo *ip_info, uint8_t *dst_mac) {
+    uint16_t port_id;
+    CLatencyManagerPerPort * lp;
+    rte_mbuf_t *m;
+    uint8_t src_mac[ETHER_ADDR_LEN];
+    uint16_t vlan;
+    uint32_t sip;
+    uint8_t *pkt;
+    ArpHdr *arp;
+    uint16_t l2_proto;
+
+    port_id = ip_info->get_port();
+    lp = &m_ports[port_id];
+    m = CGlobalInfo::pktmbuf_alloc_small(CGlobalInfo::m_socket.port_to_socket(port_id));
+    assert(m);
+    uint8_t *p = (uint8_t *)rte_pktmbuf_append(m, ip_info->get_arp_req_len());
+    ip_info->get_mac(src_mac);
+    vlan = ip_info->get_vlan();
+    switch(ip_info->ip_ver()) {
+    case COneIPInfo::IP4_VER:
+        sip = ((COneIPv4Info *)ip_info)->get_ip();
+        m->l2_len = 14 + (vlan ? 4 : 0);
+
+        pkt = p;
+
+        // dst MAC
+        memcpy(pkt, dst_mac, ETHER_ADDR_LEN);
+        pkt += ETHER_ADDR_LEN;
+        // src MAC
+        memcpy(pkt, src_mac, ETHER_ADDR_LEN);
+        pkt += ETHER_ADDR_LEN;
+
+        /* regular VLAN */
+        if (vlan != 0) {
+            *((uint16_t *)pkt) = htons(EthernetHeader::Protocol::VLAN);
+            pkt += 2;
+
+            *((uint16_t *)pkt) = htons(vlan);
+            pkt += 2;
+        }
+
+        // l3 type
+        l2_proto = htons(EthernetHeader::Protocol::ARP);
+        memcpy(pkt, &l2_proto, sizeof(l2_proto));
+        pkt += 2;
+
+        arp = (ArpHdr *)pkt;
+        arp->m_arp_hrd = htons(ArpHdr::ARP_HDR_HRD_ETHER); // Format of hardware address
+        arp->m_arp_pro = htons(EthernetHeader::Protocol::IP); // Format of protocol address
+        arp->m_arp_hln = ETHER_ADDR_LEN; // Length of hardware address
+        arp->m_arp_pln = 4; // Length of protocol address
+        arp->m_arp_op = htons(ArpHdr::ARP_HDR_OP_REPLY); // ARP opcode (command)
+
+        memcpy(&arp->m_arp_sha.data, src_mac, ETHER_ADDR_LEN); // Sender MAC address
+        arp->m_arp_sip = htonl(sip); // Sender IP address
+
+        memcpy(&arp->m_arp_tha.data, dst_mac, ETHER_ADDR_LEN); // Target MAC address
+
+        if (CGlobalInfo::m_options.preview.getVMode() >= 3) {
+            printf("Sending ARP REPLY on port %d vlan:%d, sip:%s\n", port_id, vlan
+                   , ip_to_str(sip).c_str());
+            utl_DumpBuffer(stdout, p, 60, 0);
+        }
+        if ( lp->m_io->tx(m) == 0 ) {
+            lp->m_port.m_ign_stats.m_tx_arp++;
+            lp->m_port.m_ign_stats.m_tot_bytes += 64; // mbuf size is smaller, but 64 bytes will be sent
+        } else {
+            lp->m_port.m_tx_pkt_err++;
+            rte_pktmbuf_free(m);
+        }
+        break;
+    case COneIPInfo::IP6_VER:
+        //??? implement ipv6
+        break;
+    }
+}
+
+void CLatencyManager::handle_arp_packet (rte_mbuf_t * m) {
+    uint8_t *p=rte_pktmbuf_mtod(m, uint8_t*);
+    EthernetHeader *eth = (EthernetHeader *)p;
+    ArpHdr * arp=0;
+    const COneIPInfo *ip_info;
+    uint16_t vlan_id=0;
+
+    uint16_t proto = eth->getNextProtocol();
+    arp = (ArpHdr *)(p+14);
+    if (proto == EthernetHeader::Protocol::VLAN) {
+        vlan_id = eth->getVlanTag();
+        proto = eth->getVlanProtocol();
+        arp = (ArpHdr *)(p+18);
+    }
+
+    if (EthernetHeader::Protocol::ARP != proto ||
+        arp->m_arp_op != htons(ArpHdr::ARP_HDR_OP_REQUEST)) {
+        return;
+    }
+
+    ip_info = m_arp_info.find(ntohl(arp->m_arp_tip), vlan_id);
+    if (ip_info) {
+        send_one_arp_requst(ip_info, (uint8_t *)&eth->mySource);
+    }
+
+    return;
+}
 
 void CLatencyManager::handle_rx_pkt(CLatencyManagerPerPort * lp,
                                     rte_mbuf_t * m){
     CRx_check_header *rxc = NULL;
+    bool is_arp = false;
 
 #if 0
     /****************************************/
@@ -789,9 +902,13 @@ void CLatencyManager::handle_rx_pkt(CLatencyManagerPerPort * lp,
     /****************************************/
 #endif 
 
-    lp->m_port.check_packet(m,rxc);
+    lp->m_port.check_packet(m,rxc, is_arp);
     if ( unlikely(rxc!=NULL) ){
         m_rx_check_manager.handle_packet(rxc);
+    }
+
+    if (unlikely(is_arp)) {
+        handle_arp_packet(m);
     }
 
 #if 0

@@ -151,7 +151,11 @@ public:
     void update_packet(rte_mbuf_t * m, int port_id);
     bool do_learn(uint32_t external_ip,
                   uint32_t external_dest_ip);
-    bool check_packet(rte_mbuf_t * m, CRx_check_header * & rx_p);
+    bool check_packet(rte_mbuf_t * m, CRx_check_header * & rx_p, bool &is_arp);
+    inline bool check_packet(rte_mbuf_t * m, CRx_check_header * & rx_p) {
+        bool is_arp = false;
+        return check_packet(m,rx_p,is_arp);
+    }
     bool check_rx_check(rte_mbuf_t * m);
     bool dump_packet(rte_mbuf_t * m);
     void DumpCounters(FILE *fd);
@@ -444,6 +448,9 @@ private:
     bool  try_rx();
     void  wait_for_rx_dump();
     void  handle_rx_pkt(CLatencyManagerPerPort * lp, rte_mbuf_t * m);
+
+    void send_one_arp_requst(const COneIPInfo *ip_info, uint8_t *dst_mac);
+    void handle_arp_packet (rte_mbuf_t * m);
 
  private:
      pqueue_t                m_p_queue; /* priorty queue */

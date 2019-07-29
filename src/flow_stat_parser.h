@@ -23,6 +23,7 @@
 #define __FLOW_STAT_PARSER_H__
 
 #include <arpa/inet.h>
+#include "common/Network/Packet/Arp.h"
 #include "common/Network/Packet/IPHeader.h"
 #include "common/Network/Packet/IPv6Header.h"
 #include "common/Network/Packet/TcpHeader.h"
@@ -186,10 +187,12 @@ class CSimplePacketParser {
     }
 
  public:
+    ArpHdr *        m_arp;
     IPHeader *      m_ipv4;
     IPv6Header *    m_ipv6;
     uint8_t         m_protocol;
     uint16_t        m_vlan_offset;
+    uint16_t        m_vlan_id;
     uint8_t *       m_l4;
  private:
     rte_mbuf_t *    m_m;
